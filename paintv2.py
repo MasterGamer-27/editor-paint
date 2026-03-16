@@ -5,6 +5,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+#Cualquier cambio que se haga en el archivo por favor avisar a los demas 
+#Para saber que funcion realizaron y cuales faltan por realizar
+
 # ================= CONFIGURACIÓN DE TEMA =================
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
