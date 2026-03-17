@@ -1,12 +1,11 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import colorchooser, filedialog, messagebox
+from tkinter import colorchooser, filedialog, messagebox, font
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
-
-#Cualquier cambio que se haga en el archivo por favor avisar a los demas 
-#Para saber que funcion realizaron y cuales faltan por realizar
+from PIL import Image, ImageTk, ImageDraw, ImageFont
+import threading
+import os
 
 # ================= CONFIGURACIÓN DE TEMA =================
 ctk.set_appearance_mode("dark")
@@ -34,6 +33,10 @@ class PaintApp:
         
         # Variable para la imagen de fondo (cámara o imagen cargada)
         self.background_img = None
+        
+        # ================= VARIABLES PARA HERRAMIENTA TEXTO =================
+        self.text_tool_active = False
+        self.text_config = {'size': 24, 'color': '#000000', 'font': 'Arial'}
         
         # ================= HISTORIAL DESHACER/REHACER =================
         self.undo_stack = []
@@ -68,21 +71,398 @@ class PaintApp:
         menubar = tk.Menu(self.root, bg="#1a1a1a", fg="white")
         self.root.config(menu=menubar)
         
+        # 📁 Archivo
         file_menu = tk.Menu(menubar, tearoff=0, bg="#2B2B2B", fg="white")
         menubar.add_cascade(label="📁 Archivo", menu=file_menu)
-        
         file_menu.add_command(label="📄 Nuevo Lienzo", command=self.nuevo_lienzo)
-        file_menu.add_command(label="🖼️ Abrir Imagen", command=self.abrir_imagen)  # ← NUEVA OPCIÓN
+        file_menu.add_command(label="🖼️ Abrir Imagen", command=self.abrir_imagen)
         file_menu.add_separator()
         file_menu.add_command(label="🚪 Salir", command=self.salir_app)
         
+        # 🔧 Filtros
+        filtros_menu = tk.Menu(menubar, tearoff=0, bg="#2B2B2B", fg="white")
+        menubar.add_cascade(label="🔧 Filtros", menu=filtros_menu)
+        
+        basicos_menu = tk.Menu(filtros_menu, tearoff=0, bg="#2B2B2B", fg="white")
+        filtros_menu.add_cascade(label="✨ Filtros Básicos", menu=basicos_menu)
+        basicos_menu.add_command(label="⚪ Escala de Grises", command=self.filtro_grises)
+        basicos_menu.add_command(label="🔄 Negativo", command=self.filtro_negativo)
+        basicos_menu.add_command(label="🔲 Pixelar", command=self.filtro_pixelado)
+        basicos_menu.add_command(label="💫 Desenfoque", command=self.filtro_blur)
+        basicos_menu.add_command(label="🔍 Nitidez", command=self.filtro_nitidez)
+        
+        # Atajos de teclado
         self.root.bind('<Control-z>', lambda e: self.deshacer())
         self.root.bind('<Control-Z>', lambda e: self.deshacer())
         self.root.bind('<Control-y>', lambda e: self.rehacer())
         self.root.bind('<Control-Y>', lambda e: self.rehacer())
         self.root.bind('<Control-n>', lambda e: self.nuevo_lienzo())
         self.root.bind('<Control-s>', lambda e: self.guardar_imagen())
-        self.root.bind('<Control-o>', lambda e: self.abrir_imagen())  # ← Atajo Ctrl+O
+        self.root.bind('<Control-o>', lambda e: self.abrir_imagen())
+
+    # ================= FILTROS BÁSICOS =================
+    
+    def _pil_to_cv2(self, pil_img):
+        rgb = np.array(pil_img)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    
+    def _cv2_to_pil(self, cv2_img):
+        rgb = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(rgb)
+    
+    def _aplicar_filtro_a_background(self, filtro_func):
+        """Aplica filtro a TODO el canvas (imagen + trazos) SIN postscript"""
+        if self.canvas is None:
+            messagebox.showwarning("⚠️ Sin lienzo", "Primero crea un lienzo con 'Archivo > Nuevo'")
+            return
+        
+        try:
+            # === PASO 1: Obtener imagen base ===
+            if self.background_img:
+                # Usar imagen de fondo existente
+                base_img = self.background_img.copy().convert('RGBA')
+            else:
+                # Crear lienzo blanco si no hay imagen
+                base_img = Image.new('RGBA', (self.width, self.height), (255, 255, 255, 255))
+            
+            # === PASO 2: Dibujar trazos del pincel sobre la imagen ===
+            draw = ImageDraw.Draw(base_img)
+            
+            # Obtener todos los objetos del canvas
+            for item_id in self.canvas.find_all():
+                if self.canvas.type(item_id) == 'line':
+                    coords = self.canvas.coords(item_id)
+                    config = self.canvas.itemconfig(item_id)
+                    
+                    # Extraer propiedades de la línea
+                    fill_color = config['fill'][4]
+                    width = int(float(config['width'][4]))
+                    capstyle = config['capstyle'][4]  # 'round', 'butt', 'projecting'
+                    
+                    # Dibujar línea en PIL (mismos parámetros que Tkinter)
+                    draw.line(coords, fill=fill_color, width=width, 
+                            joint='round' if capstyle == 'round' else None)
+            
+            # === PASO 3: Convertir a OpenCV y aplicar filtro ===
+            # Convertir a RGB para OpenCV (quitar canal alpha si existe)
+            img_for_cv2 = base_img.convert('RGB')
+            cv2_img = self._pil_to_cv2(img_for_cv2)
+            
+            # Aplicar el filtro
+            resultado_cv2 = filtro_func(cv2_img)
+            
+            # === PASO 4: Actualizar canvas ===
+            self.background_img = self._cv2_to_pil(resultado_cv2).convert('RGB')
+            self.imgtk = ImageTk.PhotoImage(image=self.background_img)
+            
+            self.canvas.delete("all")
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.imgtk)
+            
+            # Guardar estado para deshacer
+            self.guardar_estado()
+            
+        except Exception as e:
+            messagebox.showerror("❌ Error", f"No se pudo aplicar el filtro:\n{str(e)}")
+            print(f"❌ Error en filtro: {e}")
+
+    def filtro_grises(self):
+        def _filtro(im):
+            gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        self._aplicar_filtro_a_background(_filtro)
+    
+    def filtro_negativo(self):
+        def _filtro(im):
+            return 255 - im
+        self._aplicar_filtro_a_background(_filtro)
+    
+    def filtro_pixelado(self, escala=15):
+        def _filtro(im):
+            h, w = im.shape[:2]
+            small = cv2.resize(im, (max(1, w//escala), max(1, h//escala)), 
+                              interpolation=cv2.INTER_LINEAR)
+            return cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+        self._aplicar_filtro_a_background(_filtro)
+    
+    def filtro_blur(self):
+        def _filtro(im):
+            return cv2.GaussianBlur(im, (7, 7), 0)
+        self._aplicar_filtro_a_background(_filtro)
+    
+    def filtro_nitidez(self):
+        def _filtro(im):
+            kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+            return cv2.filter2D(im, -1, kernel)
+        self._aplicar_filtro_a_background(_filtro)
+
+    # ================= HERRAMIENTA TEXTO =================
+    
+    def activar_herramienta_texto(self):
+        """Activa el modo de inserción de texto"""
+        if self.canvas is None:
+            messagebox.showwarning("⚠️ Sin lienzo", "Primero crea un lienzo con 'Archivo > Nuevo'")
+            return
+        
+        # Abrir diálogo de configuración de texto
+        config = self._dialogo_configurar_texto()
+        if not config:
+            return  # Usuario canceló
+        
+        self.text_config = config
+        self.text_tool_active = True
+        
+        # CORRECCIÓN: Usar cursor "xterm" en lugar de "text"
+        self.canvas.config(cursor="xterm")
+        self.canvas.bind('<Button-1>', self._colocar_texto)
+        
+        messagebox.showinfo("✏️ Texto", 
+            "Configuración aplicada.\n\nHaz click en el lienzo para colocar el texto.\nPresiona ESC para cancelar.",
+            parent=self.root)
+        
+        # Bind para cancelar con ESC
+        self.root.bind('<Escape>', lambda e: self._cancelar_texto())
+
+    def _cancelar_texto(self, event=None):
+        """Desactiva el modo de inserción de texto"""
+        self.text_tool_active = False
+        if self.canvas:
+            self.canvas.config(cursor="")  # Cursor normal
+            self.canvas.bind('<Button-1>', self.iniciar_dibujo)
+        try:
+            self.root.unbind('<Escape>')
+        except:
+            pass
+
+    def _dialogo_configurar_texto(self):
+        """Diálogo modal para configurar tamaño, color y tipografía del texto"""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("✏️ Configurar Texto")
+        dialog.geometry("450x650")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        
+        # Centrar ventana
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (450 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (650 // 2)
+        dialog.geometry(f"450x+650{x}+{y}")
+        
+        # SOLUCIÓN: Esperar a que la ventana sea visible antes de hacer grab
+        dialog.wait_visibility()  # Espera a que la ventana sea visible
+        dialog.grab_set()         # Ahora sí funciona
+        
+        # Título
+        ctk.CTkLabel(dialog, text="⚙️ Configuración de Texto", 
+                    font=ctk.CTkFont(size=18, weight="bold")).pack(pady=20)
+        
+        # --- Tamaño de letra ---
+        frame_size = ctk.CTkFrame(dialog)
+        frame_size.pack(pady=10, fill=tk.X, padx=20)
+        
+        ctk.CTkLabel(frame_size, text="📏 Tamaño de letra:", 
+                    font=ctk.CTkFont(size=13)).pack(pady=(10, 5))
+        
+        size_var = tk.StringVar(value="32 - Mediano")
+        size_combo = ctk.CTkComboBox(frame_size, 
+                                    values=["16 - Pequeño", "32 - Mediano", "64 - Grande"], 
+                                    variable=size_var, 
+                                    width=250, 
+                                    state="readonly",
+                                    font=ctk.CTkFont(size=12))
+        size_combo.pack(pady=5, padx=20)
+        
+        # --- Color del texto ---
+        frame_color = ctk.CTkFrame(dialog)
+        frame_color.pack(pady=10, fill=tk.X, padx=20)
+        
+        ctk.CTkLabel(frame_color, text="🎨 Color del texto:", 
+                    font=ctk.CTkFont(size=13)).pack(pady=(10, 5))
+        
+        color_var = tk.StringVar(value="#000000")
+        
+        def elegir_color():
+            color = colorchooser.askcolor(title="🎨 Color del texto", initialcolor=color_var.get())[1]
+            if color:
+                color_var.set(color)
+                color_preview.configure(fg_color=color)
+        
+        btn_frame = ctk.CTkFrame(frame_color, fg_color="transparent")
+        btn_frame.pack(pady=5)
+        
+        color_preview = ctk.CTkButton(btn_frame, text="   ", width=40, height=30, 
+                                    fg_color="#000000", state="disabled")
+        color_preview.pack(side=tk.LEFT, padx=(20, 10))
+        
+        ctk.CTkButton(btn_frame, text="Elegir Color", command=elegir_color, 
+                    width=150).pack(side=tk.LEFT, padx=10)
+        
+        # --- Tipografía ---
+        frame_font = ctk.CTkFrame(dialog)
+        frame_font.pack(pady=10, fill=tk.X, padx=20)
+        
+        ctk.CTkLabel(frame_font, text="🔤 Tipografía:", 
+                    font=ctk.CTkFont(size=13)).pack(pady=(10, 5))
+        
+        fonts_available = ['Arial', 'Times New Roman', 'Courier New', 'Verdana', 
+                        'Georgia', 'Comic Sans MS', 'Impact', 'Tahoma', 'Arial Black']
+        font_var = tk.StringVar(value="Arial")
+        
+        font_combo = ctk.CTkComboBox(frame_font, values=fonts_available, 
+                                    variable=font_var, 
+                                    width=250, 
+                                    state="readonly",
+                                    font=ctk.CTkFont(size=12))
+        font_combo.pack(pady=5, padx=20)
+        
+        # --- Vista previa ---
+        preview_frame = ctk.CTkFrame(dialog, fg_color="#f0f0f0")
+        preview_frame.pack(pady=20, fill=tk.X, padx=20)
+        
+        preview_label = ctk.CTkLabel(preview_frame, text="Paint Pro - Vista previa", 
+                                    font=ctk.CTkFont(family="Arial", size=24),
+                                    text_color="#000000")
+        preview_label.pack(pady=15)
+        
+        def actualizar_preview(*args):
+            try:
+                size_map = {"16 - Pequeño": 16, "32 - Mediano": 32, "64 - Grande": 64}
+                size = size_map.get(size_var.get(), 32)
+                fam = font_var.get()
+                col = color_var.get()
+                preview_label.configure(text=f"Paint Pro - Vista previa", 
+                                    font=ctk.CTkFont(family=fam, size=size),
+                                    text_color=col)
+            except Exception as e:
+                print(f"Error en preview: {e}")
+        
+        size_var.trace_add('write', actualizar_preview)
+        font_var.trace_add('write', actualizar_preview)
+        color_var.trace_add('write', actualizar_preview)
+        
+        # --- Botones ---
+        btn_container = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_container.pack(pady=20)
+        
+        resultado = {'cancelado': True}
+        
+        def aceptar():
+            try:
+                size_map = {"16 - Pequeño": 16, "32 - Mediano": 32, "64 - Grande": 64}
+                resultado.update({
+                    'size': size_map.get(size_var.get(), 32),
+                    'color': color_var.get(),
+                    'font': font_var.get(),
+                    'cancelado': False
+                })
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("❌ Error", f"Configuración inválida: {str(e)}", parent=dialog)
+        
+        ctk.CTkButton(btn_container, text="✅ Aplicar", command=aceptar, 
+                    fg_color="#28A745", hover_color="#218838",
+                    width=120, height=35, font=ctk.CTkFont(size=13, weight="bold")).pack(side=tk.LEFT, padx=15)
+        
+        ctk.CTkButton(btn_container, text="❌ Cancelar", command=dialog.destroy, 
+                    fg_color="#DC3545", hover_color="#C82333",
+                    width=120, height=35, font=ctk.CTkFont(size=13, weight="bold")).pack(side=tk.LEFT, padx=15)
+        
+        # Esperar a que se cierre el diálogo
+        dialog.wait_window()
+        
+        if resultado.get('cancelado', True):
+            return None
+        
+        return {k: v for k, v in resultado.items() if k != 'cancelado'}
+
+    def _elegir_color_texto(self, color_var, btn_widget):
+        """Abre selector de color y actualiza el botón"""
+        color = colorchooser.askcolor(title="🎨 Color del texto", initialcolor=color_var.get())[1]
+        if color:
+            color_var.set(color)
+            btn_widget.configure(fg_color=color, text_color=("white" if self._es_color_oscuro(color) else "black"))
+
+    def _es_color_oscuro(self, hex_color):
+        """Determina si un color hex es oscuro para elegir contraste de texto"""
+        try:
+            hex_color = hex_color.lstrip('#')
+            r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            luminosidad = (0.299*r + 0.587*g + 0.114*b)
+            return luminosidad < 128
+        except:
+            return True
+
+    def _colocar_texto(self, event):
+        """Coloca texto preservando trazos (SIN postscript)"""
+        if not self.text_tool_active:
+            return
+        
+        texto = tk.simpledialog.askstring("✏️ Insertar Texto", 
+                                        "Escribe el texto:", 
+                                        parent=self.root,
+                                        initialvalue="Texto")
+        
+        if not texto or not texto.strip():
+            self._cancelar_texto()
+            return
+        
+        try:
+            # === PASO 1: Obtener imagen base con trazos ===
+            if self.background_img:
+                base_img = self.background_img.copy().convert('RGBA')
+            else:
+                base_img = Image.new('RGBA', (self.width, self.height), (255, 255, 255, 255))
+            
+            # === PASO 2: Dibujar trazos del pincel ===
+            draw = ImageDraw.Draw(base_img)
+            for item_id in self.canvas.find_all():
+                if self.canvas.type(item_id) == 'line':
+                    coords = self.canvas.coords(item_id)
+                    config = self.canvas.itemconfig(item_id)
+                    fill_color = config['fill'][4]
+                    width = int(float(config['width'][4]))
+                    capstyle = config['capstyle'][4]
+                    draw.line(coords, fill=fill_color, width=width,
+                            joint='round' if capstyle == 'round' else None)
+            
+            # === PASO 3: Crear capa de texto ===
+            txt_img = Image.new('RGBA', (self.width, self.height), (255, 255, 255, 0))
+            txt_draw = ImageDraw.Draw(txt_img)
+            
+            # Cargar fuente (tu lógica original)
+            try:
+                font_paths = [
+                    f"/usr/share/fonts/truetype/msttcorefonts/{self.text_config['font'].replace(' ', '_')}.ttf",
+                    f"/usr/share/fonts/truetype/dejavu/{self.text_config['font'].replace(' ', '')}-Regular.ttf",
+                    f"/usr/share/fonts/truetype/liberation/{self.text_config['font'].replace(' ', '')}-Regular.ttf",
+                    f"/usr/share/fonts/TTF/{self.text_config['font'].replace(' ', '')}.ttf",
+                    f"C:/Windows/Fonts/{self.text_config['font'].replace(' ', '')}.ttf",
+                    f"C:/Windows/Fonts/{self.text_config['font']}.ttf",
+                ]
+                font_path = next((p for p in font_paths if os.path.exists(p)), None)
+                pil_font = ImageFont.truetype(font_path, self.text_config['size']) if font_path else ImageFont.load_default()
+            except:
+                pil_font = ImageFont.load_default()
+            
+            # Dibujar texto
+            txt_draw.text((event.x, event.y), texto, 
+                        fill=self.text_config['color'], 
+                        font=pil_font, 
+                        anchor='lt')
+            
+            # === PASO 4: Combinar y actualizar ===
+            base_img = Image.alpha_composite(base_img, txt_img).convert('RGB')
+            self.background_img = base_img
+            self.imgtk = ImageTk.PhotoImage(image=self.background_img)
+            
+            self.canvas.delete("all")
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.imgtk)
+            self.guardar_estado()
+            
+        except Exception as e:
+            messagebox.showerror("❌ Error", f"No se pudo agregar el texto:\n{str(e)}")
+            print(f"❌ Error al insertar texto: {e}")
+        
+        self._cancelar_texto()
 
     # ================= FUNCIONES DEL MENÚ =================
     def nuevo_lienzo(self):
@@ -166,7 +546,6 @@ class PaintApp:
         ctk.CTkButton(dialog, text="❌ Cancelar", command=dialog.destroy, 
                       fg_color=self.color_boton_peligro, width=200, height=35).pack()
 
-    # ================= NUEVA FUNCIÓN: ABRIR IMAGEN =================
     def abrir_imagen(self):
         """Abre una imagen desde el sistema de archivos y la carga en el lienzo"""
         file_path = filedialog.askopenfilename(
@@ -178,16 +557,12 @@ class PaintApp:
         )
         
         if not file_path:
-            return  # Usuario canceló
+            return
         
         try:
-            # Cargar imagen con PIL
             img = Image.open(file_path)
-            
-            # Obtener dimensiones originales
             img_width, img_height = img.size
             
-            # Si no hay lienzo creado, preguntar si quiere usar las dimensiones de la imagen
             if self.canvas is None:
                 response = messagebox.askyesno(
                     "📐 Crear lienzo",
@@ -199,38 +574,26 @@ class PaintApp:
                 )
                 
                 if response:
-                    # Crear lienzo con dimensiones de la imagen (con límites)
                     max_size = 2000
                     new_w = min(img_width, max_size)
                     new_h = min(img_height, max_size)
                     self.crear_lienzo(new_w, new_h)
-                    # Redimensionar imagen si se aplicó límite
                     if img_width != new_w or img_height != new_h:
                         img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 else:
-                    # Crear lienzo por defecto
                     self.crear_lienzo(800, 600)
-                    # Ajustar imagen al lienzo manteniendo aspecto
                     img = self._ajustar_imagen_al_lienzo(img, self.width, self.height)
             else:
-                # Ya existe lienzo: ajustar imagen a sus dimensiones
                 img = self._ajustar_imagen_al_lienzo(img, self.width, self.height)
             
-            # Convertir a formato compatible con Tkinter
             self.background_img = img.copy()
             self.imgtk = ImageTk.PhotoImage(image=self.background_img)
-            
-            # Limpiar canvas y mostrar imagen
             self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor=tk.NW, image=self.imgtk)
-            
-            # Guardar estado para historial
             self.guardar_estado()
             
-            # Actualizar título
             filename = file_path.split("/")[-1]
             self.root.title(f"🎨 Paint Pro - {filename}")
-            
             print(f"✅ Imagen cargada: {file_path}")
             
         except Exception as e:
@@ -238,13 +601,9 @@ class PaintApp:
             print(f"❌ Error al abrir imagen: {e}")
 
     def _ajustar_imagen_al_lienzo(self, img, canvas_w, canvas_h):
-        """Redimensiona imagen manteniendo aspecto para que quepa en el lienzo"""
         img_w, img_h = img.size
-        
-        # Calcular ratio de escalado
         ratio = min(canvas_w / img_w, canvas_h / img_h)
         new_size = (int(img_w * ratio), int(img_h * ratio))
-        
         return img.resize(new_size, Image.Resampling.LANCZOS)
 
     def salir_app(self):
@@ -256,7 +615,6 @@ class PaintApp:
         self.width = width
         self.height = height
         self.background_img = None
-        
         self.undo_stack = []
         self.redo_stack = []
         
@@ -268,7 +626,6 @@ class PaintApp:
             self.canvas.destroy()
             self.canvas = None
         
-        # Herramientas primero (arriba), luego el lienzo
         if self.frame_herramientas is None:
             self.frame_herramientas = ctk.CTkFrame(self.root, fg_color="#2B2B2B")
             self.frame_herramientas.pack(pady=10, padx=10, fill=tk.X)
@@ -293,18 +650,15 @@ class PaintApp:
         self.root.geometry(f"{window_width}x{window_height}")
         
         self.guardar_estado()
-        
         print(f"✅ Lienzo creado: {self.width}x{self.height}")
 
     # ================= HERRAMIENTAS DE DIBUJO =================
     def crear_herramientas(self):
-        """Toolbar organizado en UNA SOLA FILA con grid()"""
-        
-        # Configurar columnas del grid
-        for i in range(9):
+        """Toolbar con botón de TEXTO agregado"""
+        for i in range(10):
             self.frame_herramientas.grid_columnconfigure(i, weight=0)
         
-        # Fila 0 - Todos los botones y controles
+        # Fila 0 - Botones y controles
         ctk.CTkButton(self.frame_herramientas, text="🎨 Color", 
                       command=self.elegir_color, width=90, height=40,
                       fg_color=self.color_boton_primario, corner_radius=8).grid(row=0, column=0, padx=5, pady=5)
@@ -313,25 +667,30 @@ class PaintApp:
                       command=self.abrir_camara, width=90, height=40,
                       fg_color=self.color_boton_primario, corner_radius=8).grid(row=0, column=1, padx=5, pady=5)
         
+        # 🔤 BOTÓN TEXTO (NUEVO)
+        ctk.CTkButton(self.frame_herramientas, text="🔤 Texto", 
+                      command=self.activar_herramienta_texto, width=90, height=40,
+                      fg_color="#9B59B6", corner_radius=8).grid(row=0, column=2, padx=5, pady=5)
+        
         ctk.CTkButton(self.frame_herramientas, text="↩️ Deshacer", 
                       command=self.deshacer, width=90, height=40,
-                      fg_color=self.color_boton_secundario, corner_radius=8).grid(row=0, column=2, padx=5, pady=5)
+                      fg_color=self.color_boton_secundario, corner_radius=8).grid(row=0, column=3, padx=5, pady=5)
         
         ctk.CTkButton(self.frame_herramientas, text="↪️ Rehacer", 
                       command=self.rehacer, width=90, height=40,
-                      fg_color=self.color_boton_secundario, corner_radius=8).grid(row=0, column=3, padx=5, pady=5)
+                      fg_color=self.color_boton_secundario, corner_radius=8).grid(row=0, column=4, padx=5, pady=5)
         
         ctk.CTkButton(self.frame_herramientas, text="🧹 Limpiar", 
                       command=self.limpiar_lienzo, width=90, height=40,
-                      fg_color=self.color_boton_peligro, corner_radius=8).grid(row=0, column=4, padx=5, pady=5)
+                      fg_color=self.color_boton_peligro, corner_radius=8).grid(row=0, column=5, padx=5, pady=5)
         
         ctk.CTkButton(self.frame_herramientas, text="💾 Guardar", 
                       command=self.guardar_imagen, width=90, height=40,
-                      fg_color=self.color_boton_exito, corner_radius=8).grid(row=0, column=5, padx=5, pady=5)
+                      fg_color=self.color_boton_exito, corner_radius=8).grid(row=0, column=6, padx=5, pady=5)
         
         # Label Grosor
         ctk.CTkLabel(self.frame_herramientas, text="Grosor:", 
-                     text_color="#a0a0a0").grid(row=0, column=6, padx=10, pady=5)
+                     text_color="#a0a0a0").grid(row=0, column=7, padx=10, pady=5)
         
         # Slider
         self.size_slider = ctk.CTkSlider(self.frame_herramientas, from_=1, to=20, 
@@ -339,27 +698,29 @@ class PaintApp:
                                           command=self.cambiar_grosor,
                                           progress_color=self.color_boton_primario)
         self.size_slider.set(5)
-        self.size_slider.grid(row=0, column=7, padx=5, pady=5)
+        self.size_slider.grid(row=0, column=8, padx=5, pady=5)
         
         # Label Color Actual
         self.color_label = ctk.CTkLabel(self.frame_herramientas, text="⬛ Color", 
                                          font=ctk.CTkFont(size=11), text_color="#ffffff")
-        self.color_label.grid(row=0, column=8, padx=10, pady=5)
+        self.color_label.grid(row=0, column=9, padx=10, pady=5)
         
         # Fila 1 - Historial
         self.history_label = ctk.CTkLabel(self.frame_herramientas, 
                                            text="📋 Historial: 0/0", 
                                            font=ctk.CTkFont(size=10), 
                                            text_color="#7f8c8d")
-        self.history_label.grid(row=1, column=0, columnspan=9, pady=5)
+        self.history_label.grid(row=1, column=0, columnspan=10, pady=5)
 
     # ================= FUNCIONES DE DIBUJO =================
     def iniciar_dibujo(self, event):
+        if self.text_tool_active:
+            return  # No dibujar si está activo el modo texto
         self.old_x = event.x
         self.old_y = event.y
 
     def dibujar(self, event):
-        if self.old_x and self.old_y:
+        if self.old_x and self.old_y and not self.text_tool_active:
             self.canvas.create_line(self.old_x, self.old_y, event.x, event.y,
                                     width=self.brush_size, fill=self.color,
                                     capstyle=tk.ROUND, smooth=True)
@@ -367,9 +728,10 @@ class PaintApp:
             self.old_y = event.y
 
     def detener_dibujo(self, event):
-        self.old_x = None
-        self.old_y = None
-        self.guardar_estado()
+        if not self.text_tool_active:
+            self.old_x = None
+            self.old_y = None
+            self.guardar_estado()
 
     def elegir_color(self):
         color = colorchooser.askcolor(title="🎨 Elige un color")[1]
@@ -391,21 +753,100 @@ class PaintApp:
                 print("✅ Lienzo limpiado")
 
     def guardar_imagen(self):
-        if self.canvas:
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".png",
-                filetypes=[("PNG files", "*.png"), ("JPG files", "*.jpg"), ("All files", "*.*")]
-            )
-            if file_path:
-                try:
-                    self.canvas.postscript(file=file_path + ".eps", colormode='color')
-                    # Convertir EPS a PNG si es necesario (opcional, requiere Pillow)
-                    messagebox.showinfo("✅ Éxito", f"Imagen guardada en:\n{file_path}")
-                    print(f"Imagen guardada en: {file_path}")
-                except Exception as e:
-                    messagebox.showerror("❌ Error", f"No se pudo guardar la imagen:\n{str(e)}")
+        if self.canvas is None:
+            messagebox.showwarning("⚠️ Advertencia", "Primero crea un lienzo")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[
+                ("PNG files", "*.png"), 
+                ("JPG files", "*.jpg *.jpeg"), 
+                ("All files", "*.*")
+            ]
+        )
+        if not file_path:
+            return
+        
+        ext = file_path.split('.')[-1].lower()
+        if ext not in ['png', 'jpg', 'jpeg']:
+            file_path += '.png'
+            ext = 'png'
+        
+        loading_window = self._mostrar_carga("Guardando imagen...", "Por favor espera")
+        loading_window.update()
+        
+        threading.Thread(
+            target=self._proceso_guardado, 
+            args=(file_path, ext, loading_window), 
+            daemon=True
+        ).start()
 
-    # ================= FUNCIONALIDAD DE CÁMARA =================
+    def _mostrar_carga(self, titulo, mensaje):
+        win = ctk.CTkToplevel(self.root)
+        win.title(titulo)
+        win.geometry("350x160")
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        
+        win.update_idletasks()
+        x = (win.winfo_screenwidth() // 2) - (350 // 2)
+        y = (win.winfo_screenheight() // 2) - (160 // 2)
+        win.geometry(f"350x160+{x}+{y}")
+        
+        frame = ctk.CTkFrame(win, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(frame, text=mensaje, font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(0, 15))
+        
+        progress = ctk.CTkProgressBar(frame, width=280, height=20, mode="indeterminate", progress_color="#3B8ED0")
+        progress.pack(pady=10)
+        progress.set(0)
+        
+        def iniciar_animacion():
+            progress.start()
+        win.after(100, iniciar_animacion)
+        
+        ctk.CTkLabel(frame, text="⏳ Procesando, por favor espera...", font=ctk.CTkFont(size=11), text_color="#888888").pack(pady=(10, 0))
+        return win
+
+    def _proceso_guardado(self, file_path, ext, loading_window):
+        try:
+            import os, tempfile
+            from PIL import Image
+            
+            with tempfile.NamedTemporaryFile(suffix='.eps', delete=False) as tmp:
+                temp_eps = tmp.name
+            
+            self.canvas.postscript(file=temp_eps, colormode='color')
+            img = Image.open(temp_eps)
+            
+            if ext in ['jpg', 'jpeg']:
+                img = img.convert('RGB')
+                img.save(file_path, 'JPEG', quality=95)
+            else:
+                img.save(file_path, 'PNG')
+            
+            os.unlink(temp_eps)
+            loading_window.destroy()
+            self.root.after(0, lambda: messagebox.showinfo("✅ Éxito", f"Imagen guardada en:\n{file_path}"))
+            print(f"✅ Imagen guardada: {file_path}")
+            
+        except Exception as e:
+            loading_window.destroy()
+            if "Ghostscript" in str(e) or "gs" in str(e).lower():
+                msg = ("Para guardar imágenes se requiere Ghostscript instalado.\n\n"
+                    "Instálalo con:\n"
+                    "• Linux Mint/Debian: sudo apt install ghostscript\n"
+                    "• Windows: https://ghostscript.com/releases/gsdnld.html\n"
+                    "• Mac: brew install ghostscript")
+                self.root.after(0, lambda: messagebox.showerror("❌ Dependencia faltante", msg))
+            else:
+                self.root.after(0, lambda: messagebox.showerror("❌ Error", f"No se pudo guardar:\n{str(e)}"))
+            print(f"❌ Error al guardar: {e}")
+
+    # ================= CÁMARA =================
     def abrir_camara(self):
         if self.canvas is None:
             messagebox.showwarning("⚠️ Advertencia", "Primero crea un lienzo con 'Archivo > Nuevo'")
@@ -428,7 +869,6 @@ class PaintApp:
         cam_label.pack(pady=10)
         
         cap = cv2.VideoCapture(0)
-        
         if not cap.isOpened():
             messagebox.showerror("❌ Error", "No se pudo acceder a la cámara")
             cam_window.destroy()
@@ -444,45 +884,35 @@ class PaintApp:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     img = Image.fromarray(frame_rgb)
                     imgtk = ImageTk.PhotoImage(image=img)
-                    
                     cam_label.configure(image=imgtk)
                     cam_label.imgtk = imgtk
-                
                 cam_window.after(10, update_frame)
         
         def capturar_foto(event=None):
             nonlocal is_capturing
-            
             ret, frame = cap.read()
             if ret:
                 frame = cv2.resize(frame, (self.width, self.height))
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
                 self.background_img = Image.fromarray(frame_rgb)
                 self.imgtk = ImageTk.PhotoImage(image=self.background_img)
                 self.canvas.delete("all")
                 self.canvas.create_image(0, 0, anchor=tk.NW, image=self.imgtk)
-                
                 self.guardar_estado()
-                
-                messagebox.showinfo("✅ Foto Capturada", 
-                    "La foto se cargó en el lienzo.\n\n¡Ahora puedes dibujar sobre ella!")
-                
+                messagebox.showinfo("✅ Foto Capturada", "La foto se cargó en el lienzo.\n\n¡Ahora puedes dibujar sobre ella!")
                 is_capturing = False
                 cap.release()
                 cam_window.destroy()
             else:
                 messagebox.showerror("❌ Error", "No se pudo capturar la foto")
         
-        ctk.CTkButton(cam_window, text="📸 Capturar Foto", 
-                      command=capturar_foto, fg_color=self.color_boton_primario,
-                      width=200, height=40, font=ctk.CTkFont(size=13, weight="bold")).pack(pady=10)
+        ctk.CTkButton(cam_window, text="📸 Capturar Foto", command=capturar_foto, 
+                      fg_color=self.color_boton_primario, width=200, height=40, 
+                      font=ctk.CTkFont(size=13, weight="bold")).pack(pady=10)
         
         ctk.CTkLabel(cam_window, text="💡 Tip: Presiona ESPACIO para capturar más rápido", 
                      text_color="gray", font=ctk.CTkFont(size=11)).pack()
-        
         cam_window.bind('<space>', capturar_foto)
-        
         update_frame()
         
         def on_close():
@@ -490,60 +920,42 @@ class PaintApp:
             is_capturing = False
             cap.release()
             cam_window.destroy()
-        
         cam_window.protocol("WM_DELETE_WINDOW", on_close)
 
     # ================= DESHACER / REHACER =================
     def guardar_estado(self):
         if self.canvas is None:
             return
-        
         estado = self.canvas.find_all()
         elementos = []
-        
         for item in estado:
             coords = self.canvas.coords(item)
             tipo = self.canvas.type(item)
-            
             if tipo == 'line':
                 config = self.canvas.itemconfig(item)
                 elementos.append({
-                    'tipo': 'line',
-                    'coords': coords,
-                    'fill': config['fill'][4],
-                    'width': config['width'][4],
-                    'capstyle': config['capstyle'][4],
-                    'smooth': config['smooth'][4]
+                    'tipo': 'line', 'coords': coords,
+                    'fill': config['fill'][4], 'width': config['width'][4],
+                    'capstyle': config['capstyle'][4], 'smooth': config['smooth'][4]
                 })
             elif tipo == 'image':
                 if self.background_img:
-                    elementos.append({
-                        'tipo': 'image',
-                        'imagen': self.background_img.copy()
-                    })
-        
+                    elementos.append({'tipo': 'image', 'imagen': self.background_img.copy()})
         self.undo_stack.append(elementos)
-        
         if len(self.undo_stack) > self.max_history:
             self.undo_stack.pop(0)
-        
         self.redo_stack = []
-        
         self.actualizar_history_label()
-        
         print(f"Estado guardado. Historial: {len(self.undo_stack)}/{self.max_history}")
 
     def deshacer(self):
         if len(self.undo_stack) <= 1:
             messagebox.showinfo("ℹ️ Info", "No hay más acciones para deshacer")
             return
-        
         estado_actual = self.undo_stack.pop()
         self.redo_stack.append(estado_actual)
-        
         estado_anterior = self.undo_stack[-1]
         self.restaurar_estado(estado_anterior)
-        
         self.actualizar_history_label()
         print(f"Deshacer. Historial: {len(self.undo_stack)}/{self.max_history}")
 
@@ -551,30 +963,20 @@ class PaintApp:
         if len(self.redo_stack) == 0:
             messagebox.showinfo("ℹ️ Info", "No hay más acciones para rehacer")
             return
-        
         estado = self.redo_stack.pop()
         self.undo_stack.append(estado)
-        
         self.restaurar_estado(estado)
-        
         self.actualizar_history_label()
         print(f"Rehacer. Historial: {len(self.undo_stack)}/{self.max_history}")
 
     def restaurar_estado(self, estado):
         if self.canvas is None:
             return
-        
         self.canvas.delete("all")
-        
         for elemento in estado:
             if elemento['tipo'] == 'line':
-                self.canvas.create_line(
-                    elemento['coords'],
-                    fill=elemento['fill'],
-                    width=elemento['width'],
-                    capstyle=elemento['capstyle'],
-                    smooth=elemento['smooth']
-                )
+                self.canvas.create_line(elemento['coords'], fill=elemento['fill'],
+                    width=elemento['width'], capstyle=elemento['capstyle'], smooth=elemento['smooth'])
             elif elemento['tipo'] == 'image':
                 if 'imagen' in elemento:
                     self.background_img = elemento['imagen'].copy()
