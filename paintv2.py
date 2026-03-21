@@ -237,15 +237,15 @@ class PaintApp:
         """Diálogo modal para configurar tamaño, color y tipografía del texto"""
         dialog = ctk.CTkToplevel(self.root)
         dialog.title("✏️ Configurar Texto")
-        dialog.geometry("450x650")
+        dialog.geometry("450x570")
         dialog.transient(self.root)
         dialog.resizable(False, False)
         
         # Centrar ventana
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() // 2) - (450 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (650 // 2)
-        dialog.geometry(f"450x+650{x}+{y}")
+        y = (dialog.winfo_screenheight() // 2) - (570 // 2)
+        dialog.geometry(f"450x+570{x}+{y}")
         
         # SOLUCIÓN: Esperar a que la ventana sea visible antes de hacer grab
         dialog.wait_visibility()  # Espera a que la ventana sea visible
@@ -468,14 +468,14 @@ class PaintApp:
     def nuevo_lienzo(self):
         dialog = ctk.CTkToplevel(self.root)
         dialog.title("Nuevo Lienzo")
-        dialog.geometry("350x280")
+        dialog.geometry("420x350")
         dialog.transient(self.root)
         dialog.grab_set()
         
         dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (350 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (280 // 2)
-        dialog.geometry(f"350x280+{x}+{y}")
+        x = (dialog.winfo_screenwidth() // 2) - (420 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (350 // 2)
+        dialog.geometry(f"420x350+{x}+{y}")
         
         ctk.CTkLabel(dialog, text="📐 Configurar Nuevo Lienzo", 
                      font=ctk.CTkFont(size=16, weight="bold")).pack(pady=15)
@@ -854,13 +854,13 @@ class PaintApp:
         
         cam_window = ctk.CTkToplevel(self.root)
         cam_window.title("📷 Cámara Web")
-        cam_window.geometry("680x580")
+        cam_window.geometry("680x640")
         cam_window.transient(self.root)
         
         cam_window.update_idletasks()
         x = (cam_window.winfo_screenwidth() // 2) - (680 // 2)
-        y = (cam_window.winfo_screenheight() // 2) - (580 // 2)
-        cam_window.geometry(f"680x580+{x}+{y}")
+        y = (cam_window.winfo_screenheight() // 2) - (640 // 2)
+        cam_window.geometry(f"680x640+{x}+{y}")
         
         ctk.CTkLabel(cam_window, text="📷 Cámara Web - Presiona ESPACIO o click para capturar", 
                      font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
