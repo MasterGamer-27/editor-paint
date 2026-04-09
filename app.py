@@ -1,3 +1,4 @@
+# ARCHIVO MAIN - LLAMA A METODO PAINT APP
 import customtkinter as ctk
 from paintv2 import PaintApp
 
