@@ -1,0 +1,497 @@
+import tkinter as tk
+from tkinter import colorchooser, filedialog, messagebox
+import cv2
+import numpy as np
+from PIL import Image, ImageTk
+
+class PaintApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Paint con OpenCV + Cámara")
+        self.root.geometry("400x300")
+        
+        # Variables de tamaño del lienzo
+        self.width = None
+        self.height = None
+        self.canvas = None
+        
+        # Variables de dibujo
+        self.old_x = None
+        self.old_y = None
+        self.color = 'black'
+        self.brush_size = 5
+        
+        # Variable para la imagen de fondo (cámara)
+        self.background_img = None
+        
+        # ================= HISTORIAL DESHACER/REHACER =================
+        self.undo_stack = []  # Pila para deshacer
+        self.redo_stack = []  # Pila para rehacer
+        self.max_history = 50  # Máximo de estados guardados
+        
+        # ================= CREAR MENÚ =================
+        self.crear_menu()
+        
+        # ================= LABEL DE BIENVENIDA =================
+        self.bienvenida_label = tk.Label(
+            root, 
+            text="Bienvenido\n\nSelecciona 'Archivo > Nuevo' para comenzar",
+            font=("Arial", 14),
+            justify="center"
+        )
+        self.bienvenida_label.pack(expand=True)
+
+    # ================= MENÚ =================
+    def crear_menu(self):
+        """Crea la barra de menú con Archivo > Nuevo y Salir"""
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Archivo", menu=file_menu)
+        
+        file_menu.add_command(label="📄 Nuevo", command=self.nuevo_lienzo)
+        file_menu.add_separator()
+        file_menu.add_command(label="🚪 Salir", command=self.salir_app)
+        
+        # ================= ATAJOS DE TECLADO =================
+        self.root.bind('<Control-z>', lambda e: self.deshacer())
+        self.root.bind('<Control-Z>', lambda e: self.deshacer())
+        self.root.bind('<Control-y>', lambda e: self.rehacer())
+        self.root.bind('<Control-Y>', lambda e: self.rehacer())
+
+    # ================= FUNCIONES DEL MENÚ =================
+    def nuevo_lienzo(self):
+        """Abre ventana de diálogo para elegir el tamaño del lienzo"""
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Nuevo Lienzo")
+        dialog.geometry("300x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        tk.Label(dialog, text="Configurar Nuevo Lienzo", 
+                 font=("Arial", 12, "bold")).pack(pady=10)
+        
+        # Entry para ANCHO
+        frame_width = tk.Frame(dialog)
+        frame_width.pack(pady=5)
+        tk.Label(frame_width, text="Ancho (píxeles):").pack(side=tk.LEFT, padx=5)
+        self.entry_width = tk.Entry(frame_width, width=10)
+        self.entry_width.pack(side=tk.LEFT)
+        self.entry_width.insert(0, "800")
+        
+        # Entry para ALTO
+        frame_height = tk.Frame(dialog)
+        frame_height.pack(pady=5)
+        tk.Label(frame_height, text="Alto (píxeles):").pack(side=tk.LEFT, padx=5)
+        self.entry_height = tk.Entry(frame_height, width=10)
+        self.entry_height.pack(side=tk.LEFT)
+        self.entry_height.insert(0, "600")
+        
+        def aplicar_tamano():
+            try:
+                new_width = int(self.entry_width.get())
+                new_height = int(self.entry_height.get())
+                
+                if new_width < 100 or new_height < 100:
+                    messagebox.showwarning("Advertencia", 
+                        "El tamaño mínimo es 100x100 píxeles", parent=dialog)
+                    return
+                
+                if new_width > 2000 or new_height > 2000:
+                    messagebox.showwarning("Advertencia", 
+                        "El tamaño máximo es 2000x2000 píxeles", parent=dialog)
+                    return
+                
+                if self.canvas is not None:
+                    if not messagebox.askyesno("Confirmar", 
+                        f"¿Crear nuevo lienzo de {new_width}x{new_height}?\n⚠️ Se perderá el contenido actual.",
+                        parent=dialog):
+                        return
+                
+                self.crear_lienzo(new_width, new_height)
+                dialog.destroy()
+                    
+            except ValueError:
+                messagebox.showerror("Error", 
+                    "Por favor ingresa números válidos", parent=dialog)
+        
+        tk.Button(dialog, text="Aceptar", command=aplicar_tamano, 
+                  bg="#4CAF50", fg="white", width=10).pack(pady=5)
+        tk.Button(dialog, text="Cancelar", command=dialog.destroy, width=10).pack()
+
+    def salir_app(self):
+        """Función para cerrar la aplicación"""
+        if messagebox.askyesno("Salir", "¿Estás seguro de que deseas salir?"):
+            self.root.destroy()
+
+    # ================= CREAR LIENZO =================
+    def crear_lienzo(self, width, height):
+        """Crea el lienzo con las dimensiones especificadas"""
+        
+        self.width = width
+        self.height = height
+        self.background_img = None  # Resetear imagen de fondo
+        
+        # Resetear historial
+        self.undo_stack = []
+        self.redo_stack = []
+        
+        # Eliminar label de bienvenida si existe
+        if self.bienvenida_label:
+            self.bienvenida_label.destroy()
+        
+        # Si ya existe un canvas, eliminarlo
+        if self.canvas:
+            self.canvas.destroy()
+        
+        # Eliminar frame de herramientas si existe
+        if hasattr(self, 'frame_herramientas'):
+            self.frame_herramientas.destroy()
+        
+        # Crear el canvas
+        self.canvas = tk.Canvas(self.root, width=self.width, height=self.height, bg='white')
+        self.canvas.pack(pady=10)
+        
+        # Crear frame de herramientas
+        self.crear_herramientas()
+        
+        # Bind de eventos del mouse para dibujar
+        self.canvas.bind('<Button-1>', self.iniciar_dibujo)
+        self.canvas.bind('<B1-Motion>', self.dibujar)
+        self.canvas.bind('<ButtonRelease-1>', self.detener_dibujo)
+        
+        self.root.title(f"Paint - {self.width}x{self.height}")
+        self.root.geometry(f"{self.width + 50}x{self.height + 150}")
+        
+        # Guardar estado inicial (lienzo vacío)
+        self.guardar_estado()
+        
+        print(f"Lienzo creado: {self.width}x{self.height}")
+
+    # ================= HERRAMIENTAS DE DIBUJO =================
+    def crear_herramientas(self):
+        """Crea el panel de herramientas"""
+        
+        self.frame_herramientas = tk.Frame(self.root)
+        self.frame_herramientas.pack(pady=5)
+        
+        # Botón COLOR
+        tk.Button(self.frame_herramientas, text="🎨 Color", 
+                  command=self.elegir_color).grid(row=0, column=0, padx=5)
+        
+        # Botón CÁMARA
+        tk.Button(self.frame_herramientas, text="📷 Cámara", 
+                  command=self.abrir_camara).grid(row=0, column=1, padx=5)
+        
+        # Botón DESHACER
+        tk.Button(self.frame_herramientas, text="↩️ Deshacer", 
+                  command=self.deshacer).grid(row=0, column=2, padx=5)
+        
+        # Botón REHACER
+        tk.Button(self.frame_herramientas, text="↪️ Rehacer", 
+                  command=self.rehacer).grid(row=0, column=3, padx=5)
+        
+        # Botón LIMPIAR
+        tk.Button(self.frame_herramientas, text="🧹 Limpiar", 
+                  command=self.limpiar_lienzo).grid(row=0, column=4, padx=5)
+        
+        # Botón GUARDAR
+        tk.Button(self.frame_herramientas, text="💾 Guardar", 
+                  command=self.guardar_imagen).grid(row=0, column=5, padx=5)
+        
+        # Label y Slider para GROSOR
+        tk.Label(self.frame_herramientas, text="Grosor:").grid(row=0, column=6, padx=5)
+        self.size_slider = tk.Scale(self.frame_herramientas, from_=1, to=20, 
+                                     orient=tk.HORIZONTAL, command=self.cambiar_grosor)
+        self.size_slider.set(5)
+        self.size_slider.grid(row=0, column=7, padx=5)
+        
+        # Label para mostrar color actual
+        self.color_label = tk.Label(self.frame_herramientas, text="Color: ⬛", 
+                                     font=("Arial", 10))
+        self.color_label.grid(row=0, column=8, padx=10)
+        
+        # Label para mostrar estado del historial
+        self.history_label = tk.Label(self.frame_herramientas, text="📋 0/0", 
+                                       font=("Arial", 9), fg="gray")
+        self.history_label.grid(row=1, column=0, columnspan=9, pady=5)
+
+    # ================= FUNCIONES DE DIBUJO =================
+    def iniciar_dibujo(self, event):
+        """Guarda la posición inicial del mouse"""
+        self.old_x = event.x
+        self.old_y = event.y
+
+    def dibujar(self, event):
+        """Dibuja una línea entre la posición anterior y la actual"""
+        if self.old_x and self.old_y:
+            self.canvas.create_line(self.old_x, self.old_y, event.x, event.y,
+                                    width=self.brush_size, fill=self.color,
+                                    capstyle=tk.ROUND, smooth=True)
+            self.old_x = event.x
+            self.old_y = event.y
+
+    def detener_dibujo(self, event):
+        """Resetea las coordenadas al soltar el mouse y guarda estado"""
+        self.old_x = None
+        self.old_y = None
+        self.guardar_estado()  # Guardar estado después de cada trazo
+
+    def elegir_color(self):
+        """Abre el selector de color y actualiza el color del pincel"""
+        color = colorchooser.askcolor(title="Elige un color")[1]
+        if color:
+            self.color = color
+            self.color_label.config(text=f"Color: █", fg=color)
+            print(f"Color cambiado a: {color}")
+
+    def cambiar_grosor(self, val):
+        """Cambia el grosor del pincel según el slider"""
+        self.brush_size = int(val)
+        print(f"Grosor cambiado a: {self.brush_size}")
+
+    def limpiar_lienzo(self):
+        """Limpia todo el contenido del lienzo"""
+        if self.canvas:
+            if messagebox.askyesno("Limpiar", "¿Estás seguro de limpiar el lienzo?"):
+                self.canvas.delete("all")
+                self.background_img = None
+                self.guardar_estado()  # Guardar estado después de limpiar
+                print("Lienzo limpiado")
+
+    def guardar_imagen(self):
+        """Guarda el lienzo como imagen"""
+        if self.canvas:
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".png",
+                filetypes=[("PNG files", "*.png"), ("JPG files", "*.jpg"), ("All files", "*.*")]
+            )
+            if file_path:
+                try:
+                    self.canvas.postscript(file=file_path + ".eps", colormode='color')
+                    messagebox.showinfo("Éxito", f"Imagen guardada en:\n{file_path}")
+                    print(f"Imagen guardada en: {file_path}")
+                except Exception as e:
+                    messagebox.showerror("Error", f"No se pudo guardar la imagen:\n{str(e)}")
+
+    # ================= FUNCIONALIDAD DE CÁMARA =================
+    def abrir_camara(self):
+        """Abre la ventana de la cámara web para capturar una foto"""
+        
+        if self.canvas is None:
+            messagebox.showwarning("Advertencia", "Primero crea un lienzo con 'Archivo > Nuevo'")
+            return
+        
+        # Crear ventana emergente para la cámara
+        cam_window = tk.Toplevel(self.root)
+        cam_window.title("📷 Cámara - Presiona ESPACIO o click para capturar")
+        cam_window.geometry("640x520")
+        cam_window.transient(self.root)
+        
+        # Label para mostrar el frame de la cámara
+        cam_label = tk.Label(cam_window)
+        cam_label.pack(pady=10)
+        
+        # Iniciar cámara (0 es la webcam por defecto)
+        cap = cv2.VideoCapture(0)
+        
+        if not cap.isOpened():
+            messagebox.showerror("Error", "No se pudo acceder a la cámara")
+            cam_window.destroy()
+            return
+        
+        is_capturing = True
+        
+        def update_frame():
+            """Actualiza el frame de la cámara en tiempo real"""
+            if is_capturing:
+                ret, frame = cap.read()
+                if ret:
+                    # Redimensionar para que quepa en la ventana
+                    frame = cv2.resize(frame, (640, 480))
+                    
+                    # Convertir BGR a RGB para Tkinter
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    
+                    # Convertir a formato ImageTk
+                    img = Image.fromarray(frame_rgb)
+                    imgtk = ImageTk.PhotoImage(image=img)
+                    
+                    cam_label.imgtk = imgtk
+                    cam_label.configure(image=imgtk)
+                
+                # Repetir cada 10ms
+                cam_window.after(10, update_frame)
+        
+        def capturar_foto(event=None):
+            """Captura la foto y la carga en el lienzo"""
+            nonlocal is_capturing
+            
+            ret, frame = cap.read()
+            if ret:
+                # Redimensionar al tamaño del lienzo principal
+                frame = cv2.resize(frame, (self.width, self.height))
+                
+                # Convertir BGR a RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Guardar como imagen de fondo
+                self.background_img = Image.fromarray(frame_rgb)
+                
+                # Mostrar en el canvas
+                self.imgtk = ImageTk.PhotoImage(image=self.background_img)
+                self.canvas.delete("all")
+                self.canvas.create_image(0, 0, anchor=tk.NW, image=self.imgtk)
+                
+                self.guardar_estado()  # Guardar estado después de cargar foto
+                
+                messagebox.showinfo("✅ Foto Capturada", 
+                    "La foto se cargó en el lienzo.\n¡Ahora puedes dibujar sobre ella!")
+                
+                is_capturing = False
+                cap.release()
+                cam_window.destroy()
+            else:
+                messagebox.showerror("Error", "No se pudo capturar la foto")
+        
+        # Botón de capturar
+        btn_capture = tk.Button(cam_window, text="📸 Capturar (Espacio)", 
+                                command=capturar_foto, bg="#2196F3", fg="white", font=("Arial", 10))
+        btn_capture.pack(pady=5)
+        
+        # Instrucciones
+        tk.Label(cam_window, text="💡 Tip: Presiona ESPACIO para capturar más rápido", 
+                 font=("Arial", 9), fg="gray").pack()
+        
+        # Bind de tecla espacio
+        cam_window.bind('<space>', capturar_foto)
+        
+        # Iniciar actualización de frame
+        update_frame()
+        
+        # Limpiar recursos al cerrar ventana
+        def on_close():
+            nonlocal is_capturing
+            is_capturing = False
+            cap.release()
+            cam_window.destroy()
+        
+        cam_window.protocol("WM_DELETE_WINDOW", on_close)
+
+    # ================= DESHACER / REHACER =================
+    def guardar_estado(self):
+        """Guarda el estado actual del canvas en el historial"""
+        if self.canvas is None:
+            return
+        
+        # Capturar todos los elementos del canvas
+        estado = self.canvas.find_all()
+        elementos = []
+        
+        for item in estado:
+            coords = self.canvas.coords(item)
+            tipo = self.canvas.type(item)
+            
+            if tipo == 'line':
+                config = self.canvas.itemconfig(item)
+                elementos.append({
+                    'tipo': 'line',
+                    'coords': coords,
+                    'fill': config['fill'][4],
+                    'width': config['width'][4],
+                    'capstyle': config['capstyle'][4],
+                    'smooth': config['smooth'][4]
+                })
+            elif tipo == 'image':
+                # Guardar referencia a la imagen de fondo si existe
+                if self.background_img:
+                    elementos.append({
+                        'tipo': 'image',
+                        'imagen': self.background_img.copy()
+                    })
+        
+        # Agregar a la pila de deshacer
+        self.undo_stack.append(elementos)
+        
+        # Limitar el tamaño del historial
+        if len(self.undo_stack) > self.max_history:
+            self.undo_stack.pop(0)
+        
+        # Limpiar pila de rehacer cuando se hace una nueva acción
+        self.redo_stack = []
+        
+        # Actualizar label del historial
+        self.actualizar_history_label()
+        
+        print(f"Estado guardado. Historial: {len(self.undo_stack)}/{self.max_history}")
+
+    def deshacer(self):
+        """Deshace la última acción"""
+        if len(self.undo_stack) <= 1:
+            messagebox.showinfo("Info", "No hay más acciones para deshacer")
+            return
+        
+        # Mover estado actual a la pila de rehacer
+        estado_actual = self.undo_stack.pop()
+        self.redo_stack.append(estado_actual)
+        
+        # Restaurar estado anterior
+        estado_anterior = self.undo_stack[-1]
+        self.restaurar_estado(estado_anterior)
+        
+        self.actualizar_history_label()
+        print(f"Deshacer. Historial: {len(self.undo_stack)}/{self.max_history}")
+
+    def rehacer(self):
+        """Rehace la última acción deshecha"""
+        if len(self.redo_stack) == 0:
+            messagebox.showinfo("Info", "No hay más acciones para rehacer")
+            return
+        
+        # Mover estado de rehacer a la pila de deshacer
+        estado = self.redo_stack.pop()
+        self.undo_stack.append(estado)
+        
+        # Restaurar estado
+        self.restaurar_estado(estado)
+        
+        self.actualizar_history_label()
+        print(f"Rehacer. Historial: {len(self.undo_stack)}/{self.max_history}")
+
+    def restaurar_estado(self, estado):
+        """Restaura el canvas a un estado guardado"""
+        if self.canvas is None:
+            return
+        
+        # Limpiar canvas actual
+        self.canvas.delete("all")
+        
+        # Restaurar cada elemento
+        for elemento in estado:
+            if elemento['tipo'] == 'line':
+                self.canvas.create_line(
+                    elemento['coords'],
+                    fill=elemento['fill'],
+                    width=elemento['width'],
+                    capstyle=elemento['capstyle'],
+                    smooth=elemento['smooth']
+                )
+            elif elemento['tipo'] == 'image':
+                if 'imagen' in elemento:
+                    self.background_img = elemento['imagen'].copy()
+                    self.imgtk = ImageTk.PhotoImage(image=self.background_img)
+                    self.canvas.create_image(0, 0, anchor=tk.NW, image=self.imgtk)
+
+    def actualizar_history_label(self):
+        """Actualiza el label que muestra el estado del historial"""
+        undo_count = len(self.undo_stack) - 1  # -1 porque el estado actual no cuenta
+        redo_count = len(self.redo_stack)
+        self.history_label.config(text=f"📋 Deshacer: {undo_count} | Rehacer: {redo_count}")
+
+# ================= EJECUCIÓN =================
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = PaintApp(root)
+    root.mainloop()
