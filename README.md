@@ -1,4 +1,5 @@
 # 🎨 FrameArt
+<img width="1339" height="829" alt="image" src="https://github.com/user-attachments/assets/870c1e73-20cc-4235-8087-011d71700cf7" />
 
 Editor de imágenes de escritorio desarrollado en Python con interfaz moderna y herramientas de dibujo y procesamiento.
 
