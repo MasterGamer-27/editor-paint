@@ -1,4 +1,6 @@
-# 🎨 FrameArt
+<h1 align="center">🎨 FrameArt</h1>
+<img width="1339" height="829" alt="Captura de pantalla 2026-04-18 130543" src="https://github.com/user-attachments/assets/48c02a86-9da0-405b-91f8-40acc2ab1839" />
+
 
 Editor de imágenes de escritorio desarrollado en Python con interfaz moderna y herramientas de dibujo y procesamiento.
 
