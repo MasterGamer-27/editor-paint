@@ -40,7 +40,7 @@ pip --version</code></pre>
 <hr>
 
 <h4>2. Clonar el repositorio</h4>
-<pre><code>git clone https://github.com/tu-usuario/frameart.git
+<pre><code>git clone https://github.com/tu-usuario/frameart.git](https://github.com/MasterGamer-27/editor-paint.git
 </code></pre>
 
 <hr>
@@ -154,11 +154,11 @@ source venv/bin/activate</code></pre>
 <h2 align="center">Autores</h2>
 
 <p >
-   <b>Cristrian</b><br>
-    Ingeniero en *****
+   <b>Cristian Josue Enamorado Sales</b><br>
+    Ingenieria en tecnologias computacionales
 
-  <b>Carlos</b><br>
-  Ingeniero en ******
+  <b>Carlos Andres Pineda Mejias</b><br>
+  Ing. en Tecnologías Computacionales
   
   <b>Franklin Dario Ramirez Diaz</b><br>
   Ingeniero en Desarrollo de Aplicaciones
