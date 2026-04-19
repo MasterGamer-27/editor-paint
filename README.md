@@ -62,24 +62,41 @@ source venv/bin/activate</code></pre>
 
 <pre><code>pip install opencv-python pillow customtkinter numpy</code></pre>
 
-<p>Si no puede utilizar el archivo requirements.txt y hacer esto:</p>
-
+<p><b>Opcional:</b> Puedes instalar todas las dependencias de una vez usando el archivo incluido:</p>
 <pre><code>pip install -r requirements.txt</code></pre>
 
-## ⚠️ Requisito adicional para guardar imágenes
+<h4>⚠️ Requisito adicional: Ghostscript</h4>
+<p>Para guardar imágenes, la aplicación requiere <b>Ghostscript</b> instalado en el sistema:</p>
 
-Para guardar imágenes en ciertos formatos, la aplicación requiere **Ghostscript** instalado en el sistema:
+<table>
+  <thead>
+    <tr>
+      <th>Sistema</th>
+      <th>Comando / Enlace</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>Linux Mint / Debian / Ubuntu</b></td>
+      <td><code>sudo apt install ghostscript</code></td>
+    </tr>
+    <tr>
+      <td><b>Windows</b></td>
+      <td><a href="https://ghostscript.com/releases/gsdnld.html">Descargar instalador</a></td>
+    </tr>
+    <tr>
+      <td><b>macOS</b></td>
+      <td><code>brew install ghostscript</code></td>
+    </tr>
+  </tbody>
+</table>
 
-| Sistema | Comando/Enlace |
-|---------|---------------|
-| **Linux Mint/Debian** | `sudo apt install ghostscript` |
-| **Windows** | [Descargar instalador](https://ghostscript.com/releases/gsdnld.html) |
-| **macOS** | `brew install ghostscript` |
-
-> 💡 **Nota:** Si Ghostscript no está instalado, la aplicación mostrará una notificación indicándote cómo proceder. Las funciones de dibujo y filtros seguirán funcionando normalmente.
+<blockquote>
+  💡 <b>Nota:</b> Si Ghostscript no está instalado, la aplicación mostrará una notificación. 
+  El resto de funciones (dibujo, filtros, ajustes) seguirán funcionando normalmente.
+</blockquote>
 
 <hr>
-
 
 <h4>5. Ejecutar la aplicación</h4>
 
