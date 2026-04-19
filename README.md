@@ -29,7 +29,7 @@ Para facilitar el flujo de trabajo, cuenta con un sistema de deshacer y rehacer 
 <h4>1. Requisitos previos</h4>
 <p>Asegúrate de tener instalado:</p>
 <ul>
-  <li><b>Python 3.10 o superior</b></li>
+  <li><b>Python 3.8 o superior</b></li>
   <li><b>pip</b> (incluido con Python)</li>
 </ul>
 
