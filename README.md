@@ -40,7 +40,7 @@ pip --version</code></pre>
 <hr>
 
 <h4>2. Clonar el repositorio</h4>
-<pre><code>git clone https://github.com/tu-usuario/frameart.git](https://github.com/MasterGamer-27/editor-paint.git
+<pre><code>git clone https://github.com/MasterGamer-27/editor-paint.git
 </code></pre>
 
 <hr>
@@ -62,19 +62,28 @@ source venv/bin/activate</code></pre>
 
 <pre><code>pip install opencv-python pillow customtkinter numpy</code></pre>
 
-<p><b>Opcional:</b> puedes crear un archivo <code>requirements.txt</code> con:</p>
-
-<pre><code>pip freeze &gt; requirements.txt</code></pre>
-
-<p>Y luego instalar con:</p>
+<p>Si no puede utilizar el archivo requirements.txt y hacer esto:</p>
 
 <pre><code>pip install -r requirements.txt</code></pre>
 
+## ⚠️ Requisito adicional para guardar imágenes
+
+Para guardar imágenes en ciertos formatos, la aplicación requiere **Ghostscript** instalado en el sistema:
+
+| Sistema | Comando/Enlace |
+|---------|---------------|
+| **Linux Mint/Debian** | `sudo apt install ghostscript` |
+| **Windows** | [Descargar instalador](https://ghostscript.com/releases/gsdnld.html) |
+| **macOS** | `brew install ghostscript` |
+
+> 💡 **Nota:** Si Ghostscript no está instalado, la aplicación mostrará una notificación indicándote cómo proceder. Las funciones de dibujo y filtros seguirán funcionando normalmente.
+
 <hr>
+
 
 <h4>5. Ejecutar la aplicación</h4>
 
-<pre><code>python main.py</code></pre>
+<pre><code>python app.py</code></pre>
 
 <p></p>
 
